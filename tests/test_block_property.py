@@ -7,7 +7,7 @@ from pylitematic.block_property import (
     EnumValue,
     IntegerValue,
     Property,
-    Value,
+    PropertyValue,
 )
 
 
@@ -16,7 +16,7 @@ def test_value():
     # * test sorting of values
 
     def check_value(
-        value: Value,
+        value: PropertyValue,
         target: Any,
         string: str,
         nbt: String,
@@ -41,15 +41,15 @@ def test_value():
     for typ, target, string, nbt, repr_str in proto_values:
         value = typ(target)
         check_value(value, target, string, nbt, typ, repr_str)
-        value = Value.value_factory(target)
+        value = PropertyValue.value_factory(target)
         check_value(value, target, string, nbt, typ, repr_str)
-        value = Value.from_string(string)
+        value = PropertyValue.from_string(string)
         check_value(value, target, string, nbt, typ, repr_str)
-        value = Value.from_nbt(nbt)
+        value = PropertyValue.from_nbt(nbt)
         check_value(value, target, string, nbt, typ, repr_str)
 
     with pytest.raises(TypeError):
-        Value.value_factory(value=3.14)
+        PropertyValue.value_factory(value=3.14)
 
 
 def test_property():

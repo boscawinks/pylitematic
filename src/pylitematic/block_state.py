@@ -1,79 +1,112 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from copy import deepcopy
+from nbtlib import Compound
+from typing import Any, Iterator
 
 from .resource_location import ResourceLocation
-from .block_property import Property
+from .block_property import Properties
 
 
 class BlockState:
-    # TODO:
-    # * make immutable
-    # * make hashable
-    # * create methods to init copies with different properties
-    # * __eq__ for strings
 
     __slots__ = ("_id", "_props")
 
-    def __init__(self, id: ResourceLocation, **kwargs) -> None:
-        self._id = id
-        self._props: dict[str, Property] = {}
-        for name, value in kwargs.items():
-            self._props[name] = Property.property_factory(name, value)
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._props
+    def __init__(self, _id: str, **props: Any) -> None:
+        self._id: ResourceLocation = ResourceLocation.from_string(_id)
+        self._props: Properties = Properties(**props)
 
     def __getitem__(self, name: str) -> Any:
         try:
-            return self._props[name].value
+            return self._props[name]
         except KeyError as exc:
             raise KeyError(
                 f"{type(self).__name__} '{self}' does not"
                 f" have {name!r} property") from exc
 
-    def __getattr__(self, name: str) -> Any:
-        return self[name]
+    # def __getattr__(self, name: str) -> Any:
+    #     return self[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._props
+
+    def __len__(self) -> int:
+        return len(self._props)
 
     def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, BlockState):
+        if isinstance(other, str):
+            other = BlockState.from_string(other)
+        elif not isinstance(other, BlockState):
             return NotImplemented
         return (self.id, self._props) == (other.id, other._props)
-        # return str(self) == str(other)
 
     def __lt__(self, other: Any) -> bool:
         if not isinstance(other, BlockState):
             return NotImplemented
-        # return (self.id, str(self._props)) < (other.id, str(other._props))
-        return str(self) < str(other)
+        return (self.id, self._props) < (other.id, other._props)
+
+    def __hash__(self) -> int:
+        return hash((self._id, self._props))
 
     def __str__(self) -> str:
-        if not self._props:
-            return str(self.id)
-        props_str = ",".join(map(str, [x for _, x in self.properties()]))
-        return f"{self.id}[{props_str}]"
+        props_str = "" if not self._props else str(self._props)
+        return f"{self.id}{props_str}"
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}("
+            f"id: {self._id!r}, props: {self._props!r})")
 
     @property
-    def id(self) -> ResourceLocation:
-        return self._id
+    def id(self) -> str:
+        return str(self._id)
 
-    def properties(self) -> Iterable[tuple[str, Any]]:
-        return sorted(self._props.items())
+    def props(self) -> Iterator[tuple[str, Any]]:
+        return self._props.items()
 
-    @classmethod
-    def from_string(cls, string: str) -> BlockState:
-        ...
+    def to_string(self) -> str:
+        return str(self)
 
+    @staticmethod
+    def from_string(string: str) -> BlockState:
+        idx = string.find("[") # basic parsing to separate block:id[name=value]
+        if idx == -1:
+            id, props = string, ""
+        else:
+            id, props = string[:idx], string[idx:]
 
-bs = BlockState("minecraft:stone", attached=False, age=42, attachment="floor")
-BS = BlockState("minecraft:stone", attachment="floor", age=42, attached=True)
-AIR = BlockState("minecraft:air")
+        state = BlockState(id)
+        state._props = Properties.from_string(props)
+        return state
 
-print(bs)
-print(BS)
-print(AIR)
+    def to_nbt(self) -> Compound:
+        nbt = Compound()
+        nbt["Name"] = self._id.to_nbt()
+        if self._props:
+            nbt["Properties"] = self._props.to_nbt()
+        return nbt
 
-print(f"[{', '.join(list(map(str, sorted([bs, BS, AIR]))))}]")
+    @staticmethod
+    def from_nbt(nbt: Compound) -> BlockState:
+        state = BlockState(str(nbt["Name"]))
+        state._props = Properties.from_nbt(nbt.get("Properties", Compound()))
+        return state
 
-print(bs == BS)
-print(bs["attachment"], bs.age)
+    def with_id(self, id: str) -> BlockState:
+        state = BlockState(id)
+        state._props = deepcopy(self._props)
+        return state
+
+    def with_props(self, **props: Any) -> BlockState:
+        state = BlockState(self.id)
+        new_props = deepcopy(self._props)
+        for name, value in props.items():
+            if value is None:
+                del new_props[name]
+            else:
+                new_props[name] = value
+        state._props = new_props
+        return state
+
+    def without_props(self) -> BlockState:
+        return BlockState(self.id)

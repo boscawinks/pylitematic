@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from nbtlib import String
+from dataclasses import dataclass
+import nbtlib
 import re
 from typing import Any
 
@@ -15,47 +16,36 @@ PATH_PATTERN: re.Pattern = re.compile(PATH_REGEX)
 LOCATION_PATTERN: re.Pattern = re.compile(
     rf"(?:(?P<namespace>{NAMESPACE_REGEX})?\:)?(?P<path>{PATH_REGEX})")
 
+@dataclass(frozen=True, order=True)
 class ResourceLocation:
 
-    __slots__ = ("_path", "_namespace")
+    path: str
+    namespace: str = ""
 
-    def __init__(self, path: str, namespace: str | None = None) -> None:
-        if not PATH_PATTERN.fullmatch(path):
-            raise ValueError(f"Invalid resource location path {path!r}")
-        self._path = path
+    def __post_init__(self) -> None:
+        if not PATH_PATTERN.fullmatch(self.path):
+            raise ValueError(f"Invalid resource location path {self.path!r}")
 
-        if namespace is None:
-            namespace = DEFAULT_NAMESPACE
-        if not NAMESPACE_PATTERN.fullmatch(namespace):
+        if not self.namespace:
+            object.__setattr__(self, "namespace", DEFAULT_NAMESPACE)
+        elif not NAMESPACE_PATTERN.fullmatch(self.namespace):
             raise ValueError(
-                f"Invalid resource location namespace {namespace!r}")
-        self._namespace = namespace
+                f"Invalid resource location namespace {self.namespace!r}")
 
     def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, (ResourceLocation, str)):
+        if isinstance(other, ResourceLocation):
+            return (self.namespace, self.path) == (other.namespace, other.path)
+        elif isinstance(other, str):
+            try:
+                other = ResourceLocation.from_string(other)
+                return self == other
+            except ValueError:
+                return False
+        else:
             return NotImplemented
-        return str(self) == str(other)
-
-    def __lt__(self, other: Any) -> bool:
-        if not isinstance(other, ResourceLocation):
-            return NotImplemented
-        return str(self) < str(other)
 
     def __str__(self) -> str:
         return f"{self.namespace}:{self.path}"
-
-    def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}("
-            f"namespace: {self.namespace}, path: {self.path})")
-
-    @property
-    def path(self) -> str:
-        return self._path
-
-    @property
-    def namespace(self) -> str:
-        return self._namespace
 
     def to_string(self) -> str:
         return str(self)
@@ -69,12 +59,11 @@ class ResourceLocation:
         namespace = match.group("namespace")
         path = match.group("path")
 
-        namespace = None if namespace == "" else namespace
         return ResourceLocation(path=path, namespace=namespace)
 
-    def to_nbt(self) -> String:
-        return String(self)
+    def to_nbt(self) -> nbtlib.String:
+        return nbtlib.String(self)
 
     @staticmethod
-    def from_nbt(nbt: String) -> ResourceLocation:
+    def from_nbt(nbt: nbtlib.String) -> ResourceLocation:
         return ResourceLocation.from_string(str(nbt))
