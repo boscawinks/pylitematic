@@ -6,7 +6,6 @@ from pylitematic.block_property import (
     BooleanValue,
     EnumValue,
     IntegerValue,
-    Property,
     PropertyValue,
 )
 
@@ -50,44 +49,3 @@ def test_value():
 
     with pytest.raises(TypeError):
         PropertyValue.value_factory(value=3.14)
-
-
-def test_property():
-    # TODO
-    # * test sorting of properties
-
-    def check_prop(
-        prop: Property,
-        name: str,
-        target: Any,
-        string: str,
-        nbt: tuple[str, String],
-    ) -> None:
-        assert prop.name == name
-        assert prop.value == target
-        prop.value = target
-        assert str(prop) == string
-        assert prop.to_string() == string
-        assert prop.to_nbt() == nbt
-
-    proto_props = [
-        ("enabled", True, "true", String("true"), "enabled=true"),
-        ("facing", "north", "north", String("north"), "facing=north"),
-        ("age", 42, "42", String("42"), "age=42"),
-    ]
-
-    for name, target, string, nbt, prop_string in proto_props:
-        prop = Property(name=name, value=target)
-        check_prop(prop, name, target, prop_string, (name, nbt))
-        prop = Property.from_string(string=name, value=string)
-        check_prop(prop, name, target, prop_string, (name, nbt))
-        prop = Property.from_string(string=prop_string)
-        check_prop(prop, name, target, prop_string, (name, nbt))
-        prop = Property.from_nbt(name=name, nbt=nbt)
-        check_prop(prop, name, target, prop_string, (name, nbt))
-
-    with pytest.raises(TypeError):
-        Property(name="float", value=3.14)
-
-    with pytest.raises(ValueError):
-        Property(name="Uppercase", value=1)
