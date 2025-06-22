@@ -19,11 +19,14 @@ class Vec3i:
     def __str__(self) -> str:
         return str(list(self))
 
+    def __len__(self) -> int:
+        return 3
+
     def __add__(self, other) -> Vec3i:
         arr = np.array(self)
-        other_arr = self._to_array(other)
+        other = self._to_array(other)
         try:
-            result = arr + other_arr
+            result = arr + other
         except Exception:
             return NotImplemented
         return type(self)(*result.astype(int))
@@ -33,9 +36,9 @@ class Vec3i:
 
     def __sub__(self, other) -> Vec3i:
         arr = np.array(self)
-        other_arr = self._to_array(other)
+        other = self._to_array(other)
         try:
-            result = arr - other_arr
+            result = arr - other
         except Exception:
             return NotImplemented
         return type(self)(*result.astype(int))
@@ -48,13 +51,34 @@ class Vec3i:
             return NotImplemented
         return type(self)(*result.astype(int))
 
-    def __mul__(self, scalar: int) -> Vec3i:
-        return type(self)(
-            self._a * scalar, self._b * scalar, self._c * scalar)
+    def __mul__(self, other) -> Vec3i:
+        arr = np.array(self)
+        other = self._to_array(other)
+        try:
+            result = arr * other
+        except Exception:
+            return NotImplemented
+        return type(self)(*result.astype(int))
 
-    def __floordiv__(self, scalar: int) -> Vec3i:
-        return type(self)(
-            self._a // scalar, self._b // scalar, self._c // scalar)
+    def __rmul__(self, other) -> Vec3i:
+        return self.__mul__(other)
+
+    def __floordiv__(self, other) -> Vec3i:
+        arr = np.array(self)
+        other = self._to_array(other)
+        try:
+            result = arr // other
+        except Exception:
+            return NotImplemented
+        return type(self)(*result.astype(int))
+
+    def __rfloordiv__(self, other) -> Vec3i:
+        arr = np.array(self)
+        try:
+            result = other // arr
+        except Exception:
+            return NotImplemented
+        return type(self)(*result.astype(int))
 
     def __neg__(self) -> Vec3i:
         return type(self)(-self._a, -self._b, -self._c)
