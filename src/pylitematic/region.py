@@ -28,10 +28,11 @@ class Region:
         self._palette_map: dict[BlockState, int] = {AIR: 0}
         self._blocks = np.zeros(abs(self._size), dtype=int)
 
-        self._entities: list[nbtlib.Compound] = []
-        self._tile_entities: list[nbtlib.Compound] = []
-        self._block_ticks: list[nbtlib.Compound] = []
-        self._fluid_ticks: list[nbtlib.Compound] = []
+        # TODO: Add support
+        self._entities = nbtlib.List[nbtlib.Compound]()
+        self._tile_entities = nbtlib.List[nbtlib.Compound]()
+        self._block_ticks = nbtlib.List[nbtlib.Compound]()
+        self._fluid_ticks = nbtlib.List[nbtlib.Compound]()
 
     def __contains__(self, item) -> bool:
         if isinstance(item, BlockPosition):
