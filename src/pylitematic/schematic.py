@@ -142,7 +142,6 @@ class Schematic:
 
     def add_region(self, name: str, region: Region) -> None:
         self._regions[name] = region
-        self._update()
 
     def remove_region(self, name: str) -> Region:
         return self._regions.pop(name)
