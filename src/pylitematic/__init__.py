@@ -1,4 +1,4 @@
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 from .block_state import BlockState
 from .geometry import BlockPosition, Size3D

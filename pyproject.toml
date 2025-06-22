@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylitematic"
-version = "0.0.2"
+version = "0.0.3"
 description = "Load, modify, and save Litematica schematics"
 authors = [
     { name="Boscawinks", email="bosca.winks@gmx.de" }
