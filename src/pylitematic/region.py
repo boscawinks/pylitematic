@@ -9,7 +9,7 @@ from typing import Iterator
 
 from .block_state import BlockState
 from .geometry import BlockPosition, Size3D
-from .resource_location import ResourceLocation
+from .resource_location import BlockId
 
 
 AIR = BlockState("air")
@@ -28,10 +28,11 @@ class Region:
         self._palette_map: dict[BlockState, int] = {AIR: 0}
         self._blocks = np.zeros(abs(self._size), dtype=int)
 
-        self._entities: list[nbtlib.Compound] = []
-        self._tile_entities: list[nbtlib.Compound] = []
-        self._block_ticks: list[nbtlib.Compound] = []
-        self._fluid_ticks: list[nbtlib.Compound] = []
+        # TODO: Add support
+        self._entities = nbtlib.List[nbtlib.Compound]()
+        self._tile_entities = nbtlib.List[nbtlib.Compound]()
+        self._block_ticks = nbtlib.List[nbtlib.Compound]()
+        self._fluid_ticks = nbtlib.List[nbtlib.Compound]()
 
     def __contains__(self, item) -> bool:
         if isinstance(item, BlockPosition):
@@ -41,7 +42,7 @@ class Region:
             if index is None:
                 return False
             return np.any(self._blocks == index)
-        elif isinstance(item, ResourceLocation):
+        elif isinstance(item, BlockId):
             return any(
                 (bs.id == item and np.any(self._blocks == idx))
                 for bs, idx in self._palette_map.items())
@@ -171,14 +172,6 @@ class Region:
         )
         return nbtlib.LongArray([twos.to_signed(x, 64) for x in chunks])
 
-    @staticmethod
-    def inclusive_end(
-        size: Size3D,
-        pos: BlockPosition = BlockPosition(0, 0, 0),
-    ) -> BlockPosition:
-        return pos + (size - np.sign(size))
-        # return pos + np.where(size > 0, size - 1, size + 1)
-
     @property
     def size(self) -> Size3D:
         return self._size
@@ -193,7 +186,7 @@ class Region:
 
     @cached_property
     def limit(self) -> BlockPosition:
-        return self.inclusive_end(pos=self._origin, size=self._size)
+        return self._origin + self._size.end()
 
     @cached_property
     def start(self) -> BlockPosition:
@@ -201,7 +194,7 @@ class Region:
 
     @cached_property
     def end(self) -> BlockPosition:
-        return self.inclusive_end(pos=self.start, size=self._size)
+        return self._size.end()
 
     @property
     def width(self) -> int:

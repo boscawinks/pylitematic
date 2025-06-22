@@ -4,7 +4,7 @@ from copy import deepcopy
 from nbtlib import Compound
 from typing import Any, Iterator
 
-from .resource_location import ResourceLocation
+from .resource_location import BlockId
 from .block_property import Properties
 
 
@@ -12,8 +12,15 @@ class BlockState:
 
     __slots__ = ("_id", "_props")
 
-    def __init__(self, _id: str, **props: Any) -> None:
-        self._id: ResourceLocation = ResourceLocation.from_string(_id)
+    def __init__(self, _id: str | BlockId, **props: Any) -> None:
+        if isinstance(_id, str):
+            _id = BlockId.from_string(_id)
+        elif not isinstance(_id, BlockId):
+            raise TypeError(
+                f"'_id' has to be str or {BlockId.__name__}, got"
+                f" {type(_id).__name__}")
+        self._id: BlockId = _id
+
         self._props: Properties = Properties(**props)
 
     def __getitem__(self, name: str) -> Any:
@@ -58,8 +65,8 @@ class BlockState:
             f"id: {self._id!r}, props: {self._props!r})")
 
     @property
-    def id(self) -> str:
-        return str(self._id)
+    def id(self) -> BlockId:
+        return self._id
 
     def props(self) -> Iterator[tuple[str, Any]]:
         return self._props.items()

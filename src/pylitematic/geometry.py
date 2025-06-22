@@ -191,3 +191,17 @@ class Size3D(Vec3i):
         return (
             f"{type(self).__name__}("
             f"width={self.width}, height={self.height}, length={self.length})")
+
+    def end(self, axis: tuple[int,...] | int | None = None) -> BlockPosition:
+        limit = self - np.sign(self)
+
+        if axis is None:
+            return BlockPosition(*limit)
+
+        if not isinstance(axis, tuple):
+            axis = (axis, )
+
+        ret = np.zeros_like(limit, dtype=int)
+        for ax in axis:
+            ret[ax] = limit[ax]
+        return BlockPosition(*ret)

@@ -8,8 +8,8 @@ import time
 import twos
 from typing import Iterator
 
-from .geometry import BlockPosition, Size3D
-from .region import Region
+from pylitematic.geometry import BlockPosition, Size3D
+from pylitematic.region import Region
 
 
 DEFAULT_VERSION_MAJOR: int = 7
@@ -142,7 +142,6 @@ class Schematic:
 
     def add_region(self, name: str, region: Region) -> None:
         self._regions[name] = region
-        self._update()
 
     def remove_region(self, name: str) -> Region:
         return self._regions.pop(name)
@@ -214,7 +213,10 @@ class Schematic:
 
         name = meta["Name"].unpack()
         author = meta["Author"].unpack()
-        description = meta["Description"].unpack()
+        try:
+            desc = meta["Description"].unpack()
+        except KeyError:
+            desc = ""
 
         preview = meta.get("PreviewImageData")
         if preview is not None:
@@ -248,7 +250,7 @@ class Schematic:
         schem = Schematic(
             name=name,
             author=author,
-            description=description,
+            description=desc,
             regions=regions,
             preview=preview,
             version_major=major,

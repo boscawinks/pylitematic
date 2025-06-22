@@ -67,3 +67,7 @@ class ResourceLocation:
     @staticmethod
     def from_nbt(nbt: nbtlib.String) -> ResourceLocation:
         return ResourceLocation.from_string(str(nbt))
+
+
+class BlockId(ResourceLocation):
+    ...
