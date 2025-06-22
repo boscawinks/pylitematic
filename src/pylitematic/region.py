@@ -172,14 +172,6 @@ class Region:
         )
         return nbtlib.LongArray([twos.to_signed(x, 64) for x in chunks])
 
-    @staticmethod
-    def inclusive_end(
-        size: Size3D,
-        pos: BlockPosition = BlockPosition(0, 0, 0),
-    ) -> BlockPosition:
-        return pos + (size - np.sign(size))
-        # return pos + np.where(size > 0, size - 1, size + 1)
-
     @property
     def size(self) -> Size3D:
         return self._size
@@ -194,7 +186,7 @@ class Region:
 
     @cached_property
     def limit(self) -> BlockPosition:
-        return self.inclusive_end(pos=self._origin, size=self._size)
+        return self._origin + self._size.end()
 
     @cached_property
     def start(self) -> BlockPosition:
@@ -202,7 +194,7 @@ class Region:
 
     @cached_property
     def end(self) -> BlockPosition:
-        return self.inclusive_end(pos=self.start, size=self._size)
+        return self._size.end()
 
     @property
     def width(self) -> int:
