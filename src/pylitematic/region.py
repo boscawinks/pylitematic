@@ -88,7 +88,6 @@ class Region:
 
     def __getitem__(self, key):
         index = self._key_to_index(key)
-        # print(f"{index=}")
         indices = self._blocks[index]
         if np.isscalar(indices):
             return self._palette[indices]
