@@ -9,7 +9,7 @@ from typing import Iterator
 
 from .block_state import BlockState
 from .geometry import BlockPosition, Size3D
-from .resource_location import ResourceLocation
+from .resource_location import BlockId
 
 
 AIR = BlockState("air")
@@ -42,7 +42,7 @@ class Region:
             if index is None:
                 return False
             return np.any(self._blocks == index)
-        elif isinstance(item, ResourceLocation):
+        elif isinstance(item, BlockId):
             return any(
                 (bs.id == item and np.any(self._blocks == idx))
                 for bs, idx in self._palette_map.items())
