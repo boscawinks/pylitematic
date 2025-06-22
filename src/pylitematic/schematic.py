@@ -107,7 +107,7 @@ class Schematic:
         lowers = []
         uppers = []
         for reg in self._regions.values():
-            lower, upper = reg.bounds
+            lower, upper = reg.global_bounds
             lowers.append(lower)
             uppers.append(upper)
         return (
@@ -121,7 +121,7 @@ class Schematic:
 
     @property
     def blocks(self) -> int:
-        return sum(reg.blocks for reg in self._regions.values())
+        return sum(reg.block_count for reg in self._regions.values())
 
     @property
     def region_count(self) -> int:
