@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from bitpacking import bitpack, bitunpack
 from functools import cached_property
+from itertools import product
 import nbtlib
 import numpy as np
 import twos
@@ -21,116 +23,63 @@ class Region:
         size: tuple[int, int, int] | Size3D,
         origin: tuple[int, int, int] | BlockPosition = (0, 0, 0),
     ):
-        self._origin: BlockPosition = BlockPosition(*origin)
-        self._size: Size3D = Size3D(*size)
+        if not isinstance(size, Size3D):
+            size = Size3D(*size)
+        self._size: Size3D = size
 
-        self._palette: list[BlockState] = [AIR]
-        self._palette_map: dict[BlockState, int] = {AIR: 0}
+        if not isinstance(origin, BlockPosition):
+            origin = BlockPosition(*origin)
+        self._origin: BlockPosition = origin
+
+        self._palette: list[BlockState] = [AIR] # TODO: add clear method
+        self._palette_map: dict[BlockState, int] = {AIR: 0} # TODO: bind tighter to _palette
         self._blocks = np.zeros(abs(self._size), dtype=int)
 
-        # TODO: Add support
+        # TODO: Add support for (tile) entities and ticks
         self._entities = nbtlib.List[nbtlib.Compound]()
         self._tile_entities = nbtlib.List[nbtlib.Compound]()
         self._block_ticks = nbtlib.List[nbtlib.Compound]()
         self._fluid_ticks = nbtlib.List[nbtlib.Compound]()
 
+        self._local = LocalRegionView(self)
+        self._world = WorldRegionView(self)
+        self._numpy = NumpyRegionView(self)
+
+    @property
+    def local(self) -> LocalRegionView:
+        return self._local
+
+    @property
+    def world(self) -> WorldRegionView:
+        return self._world
+
+    @property
+    def numpy(self) -> NumpyRegionView:
+        return self._numpy
+
     def __contains__(self, item) -> bool:
-        if isinstance(item, BlockPosition):
-            return all(self.lower <= item) and all(item <= self.upper)
-        elif isinstance(item, BlockState):
-            index = self._palette_map.get(item)
-            if index is None:
-                return False
-            return np.any(self._blocks == index)
-        elif isinstance(item, BlockId):
-            return any(
-                (bs.id == item and np.any(self._blocks == idx))
-                for bs, idx in self._palette_map.items())
-        else:
-            return False
+        return item in self.local
 
-    def _expand_index(self, index):
-        if not isinstance(index, tuple):
-            index = (index,)
-        ndim = self._blocks.ndim
-        result = []
-        for item in index:
-            if item is Ellipsis:
-                result.extend([slice(None)] * (ndim - len(index) + 1))
-            else:
-                result.append(item)
-        while len(result) < ndim:
-            result.append(slice(None))
-        return tuple(result)
+    def __eq__(self, other) -> bool:
+        return self.local == other
 
-    def _to_internal(self, pos):
-        index = []
-        for i, item in enumerate(pos):
-            offset = self.lower[i]
-            if isinstance(item, int):
-                index.append(item - offset)
-            elif isinstance(item, slice):
-                start = item.start - offset if item.start is not None else None
-                stop = item.stop - offset if item.stop is not None else None
-                index.append(slice(start, stop, item.step))
-            else:
-                index.append(item)
-        return tuple(index)
-
-    def _from_internal(self, index: tuple[int, int, int]) -> BlockPosition:
-        return self.lower + index
-
-    def _key_to_index(self, key):
-        if isinstance(key, BlockPosition):
-            index = tuple(key)
-        else:
-            index = self._expand_index(key)
-        return self._to_internal(index)
+    def __ne__(self, other) -> bool:
+        return self.local != other
 
     def __getitem__(self, key):
-        index = self._key_to_index(key)
-        indices = self._blocks[index]
-        if np.isscalar(indices):
-            return self._palette[indices]
-
-        return np.array(self._palette, dtype=object)[indices]
+        return self.local[key]
 
     def __setitem__(self, key, value) -> None:
-        index = self._key_to_index(key)
+        self.local[key] = value
 
-        if isinstance(value, list):
-            value = np.array(value, dtype=object)
-
-        if isinstance(value, BlockState):
-            # assign single BlockState to slice
-            if value not in self._palette_map:
-                self._palette_map[value] = len(self._palette)
-                self._palette.append(value)
-            self._blocks[index] = self._palette_map[value]
-
-        elif isinstance(value, np.ndarray):
-            if value.shape != self._blocks[index].shape:
-                raise ValueError(
-                    "Shape mismatch between assigned array and target slice")
-
-            # look up (or add) indices for all BlockStates
-            unique_states, xdi = np.unique(value, return_inverse=True)
-            idx = []
-            for state in unique_states:
-                if state not in self._palette_map:
-                    self._palette_map[state] = len(self._palette)
-                    self._palette.append(state)
-                idx.append(self._palette_map[state])
-            index_array = np.array(idx, dtype=int)[xdi].reshape(value.shape)
-            self._blocks[index] = index_array
-        else:
-            raise TypeError(
-                "Value must be a BlockState or a list of BlockStates")
+    def __iter__(self) -> tuple[BlockPosition, BlockState]:
+        return iter(self.local)
 
     def compact_palette(self) -> None:
+        # TODO: determine all appropriate places to call this method
         idx = np.unique(self._blocks)
-        # always include minecraft:air in a palette
         if 0 not in idx:
+            # always include minecraft:air as the first entry in the palette
             idx = np.insert(idx, 0, 0)
         index_map = {old: new for new, old in enumerate(idx)}
 
@@ -146,6 +95,7 @@ class Region:
         self._palette = palette
         self._palette_map = palette_map
 
+    # block state en- / decoding (NBT)
     def _bits_per_state(self) -> int:
         return max(2, (len(self._palette) - 1).bit_length())
 
@@ -176,114 +126,72 @@ class Region:
     def size(self) -> Size3D:
         return self._size
 
-    @cached_property
-    def sign(self) -> Size3D:
-        return Size3D(*np.sign(self._size))
+    @property
+    def width(self) -> int:
+        return self.size.width
+
+    @property
+    def height(self) -> int:
+        return self.size.height
+
+    @property
+    def length(self) -> int:
+        return self.size.length
+
+    @property
+    def volume(self) -> int:
+        return self.size.volume
 
     @property
     def origin(self) -> BlockPosition:
         return self._origin
 
-    @cached_property
-    def limit(self) -> BlockPosition:
-        return self._origin + self._size.end()
-
-    @cached_property
-    def start(self) -> BlockPosition:
-        return BlockPosition(0, 0, 0)
-
-    @cached_property
-    def end(self) -> BlockPosition:
-        return self._size.end()
-
-    @property
-    def width(self) -> int:
-        return self._size.width
-
-    @property
-    def height(self) -> int:
-        return self._size.height
-
-    @property
-    def length(self) -> int:
-        return self._size.length
-
-    @property
-    def volume(self) -> int:
-        return np.prod(self.shape).item()
-
     @property
     def block_count(self) -> int:
-        # TODO: Add filter BlockState and rename to count()
-        return np.count_nonzero(self._blocks)
+        # TODO: Add filter BlockStates / BlockIds and rename to count()
+        return np.sum(self != AIR).item()
 
     @property
-    def shape(self) -> tuple[int, int, int]:
-        return self._blocks.shape
-
-    @cached_property
     def lower(self) -> BlockPosition:
-        return BlockPosition(*np.min((self.start, self.end), axis=0))
+        return self.local.lower
 
-    @cached_property
+    @property
     def upper(self) -> BlockPosition:
-        return BlockPosition(*np.max((self.start, self.end), axis=0))
+        return self.local.upper
 
-    @cached_property
+    @property
     def bounds(self) -> tuple[BlockPosition, BlockPosition]:
-        return self.lower, self.upper
+        return self.local.bounds
 
-    @cached_property
-    def global_lower(self) -> BlockPosition:
-        return BlockPosition(*np.min((self.origin, self.limit), axis=0))
+    def items(self) -> Iterator[tuple[BlockPosition, BlockState]]:
+        return self.local.items()
 
-    @cached_property
-    def global_upper(self) -> BlockPosition:
-        return BlockPosition(*np.max((self.origin, self.limit), axis=0))
+    def positions(self) -> Iterator[BlockPosition]:
+        return self.local.positions()
 
-    @cached_property
-    def global_bounds(self) -> tuple[BlockPosition, BlockPosition]:
-        return self.global_lower, self.global_upper
+    def blocks(self) -> Iterator[BlockState]:
+        return self.local.blocks()
 
-    def blocks(
-        self,
-        include: BlockState | list[BlockState] | None = None,
-        exclude: BlockState | list[BlockState] | None = None,
-        ignore_props: bool = False,
-    ) -> Iterator[tuple[BlockPosition, BlockState]]:
-        if isinstance(include, BlockState):
-            include = [include]
-        if isinstance(exclude, BlockState):
-            exclude = [exclude]
+    # block position transformations
+    def world_to_local(self, world: BlockPosition) -> BlockPosition:
+        return world - self._origin
 
-        for z, y, x in np.ndindex(self.shape[::-1]):
-            pos = BlockPosition(x, y, z) * self.sign
-            state = self[pos]
+    def local_to_world(self, local: BlockPosition) -> BlockPosition:
+        return self._origin + local
 
-            if exclude:
-                if not ignore_props:
-                    if state in exclude:
-                        continue
-                else:
-                    if any(state.id == ex.id for ex in exclude):
-                        continue
+    def local_to_numpy(self, local: BlockPosition) -> BlockPosition:
+        return BlockPosition(*self.local.position_to_index(local))
 
-            if include:
-                if not ignore_props:
-                    if state not in include:
-                        continue
-                else:
-                    if not any(state.id == s.id for s in include):
-                        continue
+    def numpy_to_local(self, index: BlockPosition) -> BlockPosition:
+        return self.local.index_to_position(tuple(index))
 
-            yield pos, state
+    def world_to_numpy(self, world: BlockPosition) -> BlockPosition:
+        return BlockPosition(*self.world.position_to_index(world))
 
-    def to_global(self, local_pos: BlockPosition) -> BlockPosition:
-        return self._origin + local_pos
+    def numpy_to_world(self, index: BlockPosition) -> BlockPosition:
+        return self.world.index_to_position(tuple(index))
 
-    def to_local(self, global_pos: BlockPosition) -> BlockPosition:
-        return global_pos - self._origin
-
+    # NBT conversion
     def to_nbt(self) -> nbtlib.Compound:
         nbt = nbtlib.Compound()
 
@@ -301,12 +209,12 @@ class Region:
 
         return nbt
 
-    @staticmethod
-    def from_nbt(nbt: nbtlib.Compound) -> Region:
+    @classmethod
+    def from_nbt(cls, nbt: nbtlib.Compound) -> Region:
         pos = BlockPosition.from_nbt(nbt["Position"])
         size = Size3D.from_nbt(nbt["Size"])
 
-        region = Region(origin=pos, size=size)
+        region = cls(origin=pos, size=size)
 
         region._palette = [
             BlockState.from_nbt(block) for block in nbt["BlockStatePalette"]]
@@ -319,3 +227,259 @@ class Region:
         region._fluid_ticks = nbt["PendingFluidTicks"]
 
         return region
+
+
+class _RegionView(ABC):
+
+    def __init__(self, region: Region) -> None:
+        self.region = region
+        # TODO: add support for (tile) entities and ticks
+
+    @property
+    def _blocks(self) -> np.ndarray[int]:
+        return self.region._blocks
+
+    @property
+    def _palette(self) -> list[BlockState]:
+        return self.region._palette
+
+    @property
+    def _palette_map(self) -> dict[BlockState, int]:
+        return self.region._palette_map
+
+    @abstractmethod
+    def position_to_index(self, pos: BlockPosition) -> tuple[int, int, int]:
+        ...
+
+    @abstractmethod
+    def index_to_position(self, index: tuple[int, int, int]) -> BlockPosition:
+        ...
+
+    @abstractmethod
+    def _align_array(self, arr: np.ndarray) -> np.ndarray:
+        ...
+
+    @abstractmethod
+    def _transform_index(self, index):
+        ...
+
+    def __getitem__(self, key):
+        if isinstance(key, BlockPosition):
+            # return self.at(key) # TODO
+            key = tuple(key)
+        index = self._transform_index(key)
+
+        indices = self._blocks[index]
+        if np.isscalar(indices):
+            return self._palette[indices]
+        else:
+            return np.array(self._palette, dtype=object)[indices]
+
+    def __setitem__(self, key, value):
+        if isinstance(key, BlockPosition):
+            # return self.set_at(key, value) # TODO
+            key = tuple(key)
+        index = self._transform_index(key)
+
+        if isinstance(value, list):
+            value = np.array(value, dtype=object)
+
+        if isinstance(value, BlockState):
+            # assign single BlockState to slice
+            if value not in self._palette_map:
+                self._palette_map[value] = len(self._palette)
+                self._palette.append(value)
+            self._blocks[index] = self._palette_map[value]
+
+        elif isinstance(value, np.ndarray):
+            if value.shape != self._blocks[index].shape:
+                # TODO: allow casting
+                raise ValueError(
+                    "Shape mismatch between assigned array and target slice")
+
+            # look up (or add) indices for all BlockStates
+            unique_states, xdi = np.unique(value, return_inverse=True)
+            idx = []
+            for state in unique_states:
+                if state not in self._palette_map:
+                    self._palette_map[state] = len(self._palette)
+                    self._palette.append(state)
+                idx.append(self._palette_map[state])
+            index_array = np.array(idx, dtype=int)[xdi].reshape(value.shape)
+            self._blocks[index] = index_array
+        else:
+            raise TypeError(
+                "Value must be a BlockState or a list of BlockStates")
+
+    def __contains__(self, item) -> bool:
+        if isinstance(item, BlockPosition):
+            return all(self.lower <= item) and all(item <= self.upper)
+
+        elif isinstance(item, BlockState):
+            index = self._palette_map.get(item)
+            if index is None:
+                return False
+            return index in self._blocks
+            # return np.any(self._blocks == index).item()
+
+        elif isinstance(item, BlockId):
+            return any(
+                # bs.id == item and np.any(self._blocks == idx)
+                bs.id == item and idx in self._blocks
+                for bs, idx in self._palette_map.items())
+
+        else:
+            return False
+
+    def __iter__(self) -> Iterator[tuple[BlockPosition, BlockState]]:
+        return self.items()
+
+    def items(self) -> Iterator[tuple[BlockPosition, BlockState]]:
+        for pos, block in zip(self.positions(), self.blocks()):
+            yield pos, block
+
+    def positions(self) -> Iterator[BlockPosition]:
+        ranges = [
+            range(start, stop, step)
+            for start, stop, step
+            in zip(self.origin, self.origin + self.size, self.size.sign)
+        ]
+        for z, y, x in product(*reversed(ranges)):
+            yield BlockPosition(x, y, z)
+
+    def blocks(self) -> Iterator[BlockState]:
+        indices = self._align_array(self._blocks).transpose(2, 1, 0).ravel()
+        palette = np.array(self._palette, dtype=object)
+        for block in palette[indices]:
+            yield block
+
+    def __eq__(self, other) -> np.ndarray[bool]:
+        palette = np.array(self._palette, dtype=object)
+
+        if isinstance(other, BlockState):
+            matches = np.array([state == other for state in palette])
+            mask = matches[self._blocks]
+
+        elif isinstance(other, BlockId):
+            matches = np.array([state.id == other for state in palette])
+            mask = matches[self._blocks]
+
+        else:
+            return NotImplemented
+
+        return self._align_array(mask)
+
+    def __ne__(self, other) -> np.ndarray[bool]:
+        return np.invert(self.__eq__(other))
+
+    property
+    @abstractmethod
+    def origin(self) -> BlockPosition:
+        ...
+
+    @property
+    @abstractmethod
+    def size(self) -> Size3D:
+        ...
+
+    @cached_property
+    def limit(self) -> BlockPosition:
+        return self.origin + self.size.limit
+
+    @cached_property
+    def lower(self) -> BlockPosition:
+        return BlockPosition(*np.min((self.origin, self.limit), axis=0))
+
+    @cached_property
+    def upper(self) -> BlockPosition:
+        return BlockPosition(*np.max((self.origin, self.limit), axis=0))
+
+    @property
+    def bounds(self) -> tuple[BlockPosition, BlockPosition]:
+        return self.lower, self.upper
+
+
+class NumpyRegionView(_RegionView):
+
+    @property
+    def origin(self) -> BlockPosition:
+        return BlockPosition(0, 0, 0)
+
+    @property
+    def size(self) -> Size3D:
+        return abs(self.region._size)
+
+    def position_to_index(self, pos: BlockPosition) -> tuple[int, int, int]:
+        return tuple(pos)
+
+    def index_to_position(self, index: tuple[int, int, int]) -> BlockPosition:
+        return BlockPosition(*index)
+
+    def _align_array(self, arr: np.ndarray) -> np.ndarray:
+        return arr
+
+    def _transform_index(self, index):
+        return index
+
+
+class _OrientedView(_RegionView):
+
+    @property
+    def size(self) -> Size3D:
+        return self.region._size
+
+    @cached_property
+    def negative_axes(self) -> tuple[int,...]:
+        return tuple(np.argwhere(self.size < 0).flatten().tolist())
+
+    def position_to_index(self, pos: BlockPosition) -> tuple[int, int, int]:
+        return pos - self.lower
+
+    def index_to_position(self, index: tuple[int, int, int]) -> BlockPosition:
+        return self.lower + index
+
+    def _align_array(self, arr: np.ndarray) -> np.ndarray:
+        return np.flip(arr, axis=self.negative_axes)
+
+    def _transform_index(self, key):
+        if isinstance(key, (int, np.integer, slice, type(Ellipsis))):
+            key = (key,)
+
+        if isinstance(key, tuple):
+            key = list(key)
+            for i, k in enumerate(key):
+                offset = self.lower[i]
+                if isinstance(k, (int, np.integer)):
+                    key[i] = k - offset
+                elif isinstance(k, slice):
+                    start = k.start - offset if k.start is not None else None
+                    stop = k.stop - offset if k.stop is not None else None
+                    key[i] = slice(start, stop, k.step)
+                else:
+                    # Ellipsis
+                    key[i] = k
+            return tuple(key)
+
+        elif isinstance(key, np.ndarray) and key.dtype == bool:
+            # boolean indexing
+            key = self._align_array(key)
+            if key.shape != self._blocks.shape:
+                raise IndexError("Boolean index must match region shape.")
+            return key
+
+        else:
+            return key
+
+
+class LocalRegionView(_OrientedView):
+
+    @property
+    def origin(self) -> BlockPosition:
+        return BlockPosition(0, 0, 0)
+
+
+class WorldRegionView(_OrientedView):
+
+    @property
+    def origin(self) -> BlockPosition:
+        return self.region._origin

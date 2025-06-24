@@ -70,6 +70,7 @@ class Schematic:
         self._created_at = round(time.time() * 1000)
         self._modified_at = self._created_at
 
+        # TODO: use packaging.version.Version
         self.version_major = version_major
         self.version_minor = version_minor
         self.mc_version = mc_version
@@ -104,10 +105,11 @@ class Schematic:
 
     @property
     def bounds(self) -> tuple[BlockPosition, BlockPosition]:
+        # TODO: make cached and update on region add / remove
         lowers = []
         uppers = []
         for reg in self._regions.values():
-            lower, upper = reg.global_bounds
+            lower, upper = reg.world.bounds
             lowers.append(lower)
             uppers.append(upper)
         return (
@@ -142,9 +144,11 @@ class Schematic:
 
     def add_region(self, name: str, region: Region) -> None:
         self._regions[name] = region
+        # TODO: re-calculate bounding box
 
     def remove_region(self, name: str) -> Region:
         return self._regions.pop(name)
+        # TODO: re-calculate bounding box
 
     @property
     def created_at(self) -> datetime:
@@ -158,15 +162,14 @@ class Schematic:
         file = nbtlib.File(self.to_nbt())
         file.save(path, gzipped=True, byteorder="big")
 
-    @staticmethod
-    def load(path: pathlib.Path | str) -> Schematic:
+    @classmethod
+    def load(cls, path: pathlib.Path | str) -> Schematic:
         if isinstance(path, str):
             path = pathlib.Path(path)
         nbt = nbtlib.File.load(path.expanduser(), True)
-        return Schematic.from_nbt(nbt)
+        return cls.from_nbt(nbt)
 
     def to_nbt(self) -> nbtlib.Compound:
-        # self._update()
         nbt = nbtlib.Compound()
 
         # meta data
@@ -202,8 +205,8 @@ class Schematic:
 
         return nbt
 
-    @staticmethod
-    def from_nbt(nbt: nbtlib.Compound) -> Schematic:
+    @classmethod
+    def from_nbt(cls, nbt: nbtlib.Compound) -> Schematic:
         # meta data
         try:
             meta = nbt["Metadata"]
@@ -247,7 +250,7 @@ class Schematic:
 
         mc_version = nbt.get("MinecraftDataVersion")
 
-        schem = Schematic(
+        schem = cls(
             name=name,
             author=author,
             description=desc,

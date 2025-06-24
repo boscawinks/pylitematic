@@ -17,10 +17,10 @@ def test_schematic(tmp_path):
 
     boulder = Region(
         size=(4, 4, 4), origin=ground.origin+[6, ground.height, 6])
-    for pos, block in boulder.blocks():
+    for pos, block in boulder.items():
         if block == air:
             boulder[pos] = cobble
-    # ^ since region is empty, this is equivalent to boulder[:] = cobble
+    # ^ since region is empty this is equivalent to boulder[...] = cobble
 
     snow_man = Region(
         size=(1, 3, 1), origin=boulder.origin+[1, boulder.height, 1])
