@@ -50,8 +50,8 @@ class ResourceLocation:
     def to_string(self) -> str:
         return str(self)
 
-    @staticmethod
-    def from_string(string: str) -> ResourceLocation:
+    @classmethod
+    def from_string(cls, string: str) -> ResourceLocation:
         match = LOCATION_PATTERN.fullmatch(string)
         if not match:
             raise ValueError(f"Invalid resource location string {string!r}")
@@ -59,14 +59,14 @@ class ResourceLocation:
         namespace = match.group("namespace")
         path = match.group("path")
 
-        return ResourceLocation(path=path, namespace=namespace)
+        return cls(path=path, namespace=namespace)
 
     def to_nbt(self) -> nbtlib.String:
         return nbtlib.String(self)
 
-    @staticmethod
-    def from_nbt(nbt: nbtlib.String) -> ResourceLocation:
-        return ResourceLocation.from_string(str(nbt))
+    @classmethod
+    def from_nbt(cls, nbt: nbtlib.String) -> ResourceLocation:
+        return cls.from_string(str(nbt))
 
 
 class BlockId(ResourceLocation):

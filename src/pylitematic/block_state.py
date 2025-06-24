@@ -74,15 +74,15 @@ class BlockState:
     def to_string(self) -> str:
         return str(self)
 
-    @staticmethod
-    def from_string(string: str) -> BlockState:
+    @classmethod
+    def from_string(cls, string: str) -> BlockState:
         idx = string.find("[") # basic parsing to separate block:id[name=value]
         if idx == -1:
             id, props = string, ""
         else:
             id, props = string[:idx], string[idx:]
 
-        state = BlockState(id)
+        state = cls(id)
         state._props = Properties.from_string(props)
         return state
 
@@ -93,19 +93,19 @@ class BlockState:
             nbt["Properties"] = self._props.to_nbt()
         return nbt
 
-    @staticmethod
-    def from_nbt(nbt: Compound) -> BlockState:
-        state = BlockState(str(nbt["Name"]))
+    @classmethod
+    def from_nbt(cls, nbt: Compound) -> BlockState:
+        state = cls(str(nbt["Name"]))
         state._props = Properties.from_nbt(nbt.get("Properties", Compound()))
         return state
 
     def with_id(self, id: str) -> BlockState:
-        state = BlockState(id)
+        state = type(self)(id)
         state._props = deepcopy(self._props)
         return state
 
     def with_props(self, **props: Any) -> BlockState:
-        state = BlockState(self.id)
+        state = type(self)(self.id)
         new_props = deepcopy(self._props)
         for name, value in props.items():
             if value is None:

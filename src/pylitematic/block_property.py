@@ -94,10 +94,10 @@ class Properties(dict):
     def to_string(self) -> str:
         return str(self)
 
-    @staticmethod
-    def from_string(string: str) -> Properties:
+    @classmethod
+    def from_string(cls, string: str) -> Properties:
         if string in ("", "[]"):
-            return Properties()
+            return cls()
 
         if not (string.startswith("[") and string.endswith("]")):
             raise ValueError(f"Invalid properties string {string!r}")
@@ -113,18 +113,18 @@ class Properties(dict):
                 ValueError(f"Duplicate property name {name!r}")
             props[name] = PropertyValue.from_string(string=val_str).get()
 
-        return Properties(props)
+        return cls(props)
 
     def to_nbt(self) -> nbtlib.Compound:
         return nbtlib.Compound(
             {name: value.to_nbt() for name, value in sorted(super().items())})
 
-    @staticmethod
-    def from_nbt(nbt: nbtlib.Compound) -> Properties:
+    @classmethod
+    def from_nbt(cls, nbt: nbtlib.Compound) -> Properties:
         props = {}
         for name, value in nbt.items():
             props[name] = PropertyValue.from_nbt(nbt=value).get()
-        return Properties(props)
+        return cls(props)
 
 
 class PropertyValue(ABC):
@@ -204,20 +204,20 @@ class PropertyValue(ABC):
     def to_string(self) -> str:
         return str(self)
 
-    @staticmethod
-    def from_string(string: str) -> PropertyValue:
+    @classmethod
+    def from_string(cls, string: str) -> PropertyValue:
         try:
             value = json.loads(string)
         except json.JSONDecodeError:
             value = string
-        return PropertyValue.value_factory(value)
+        return cls.value_factory(value)
 
     def to_nbt(self) -> nbtlib.String:
         return nbtlib.String(self)
 
-    @staticmethod
-    def from_nbt(nbt: nbtlib.String) -> PropertyValue:
-        return PropertyValue.from_string(str(nbt))
+    @classmethod
+    def from_nbt(cls, nbt: nbtlib.String) -> PropertyValue:
+        return cls.from_string(str(nbt))
 
 
 class BooleanValue(PropertyValue):
