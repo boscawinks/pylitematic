@@ -163,6 +163,7 @@ class Schematic:
         self._regions = {}
 
     def save(self, path: pathlib.Path | str) -> None:
+        self._modified_at = int(time.time() * 1000)
         file = nbtlib.File(self.to_nbt())
         file.save(path, gzipped=True, byteorder="big")
 
