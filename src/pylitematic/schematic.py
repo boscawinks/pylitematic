@@ -9,7 +9,7 @@ import twos
 from typing import Iterator
 
 from pylitematic.geometry import BlockPosition, Size3D
-from pylitematic.region import Region
+from pylitematic.region import AIR, Region
 
 
 DEFAULT_VERSION_MAJOR: int = 7
@@ -123,7 +123,8 @@ class Schematic:
 
     @property
     def blocks(self) -> int:
-        return sum(reg.block_count for reg in self._regions.values())
+        return sum(
+            reg.volume - reg.count(AIR) for reg in self._regions.values())
 
     @property
     def region_count(self) -> int:
@@ -158,6 +159,9 @@ class Schematic:
     def modified_at(self) -> datetime:
         return datetime.fromtimestamp(int(self._modified_at / 1000))
 
+    def clear(self) -> None:
+        self._regions = {}
+
     def save(self, path: pathlib.Path | str) -> None:
         file = nbtlib.File(self.to_nbt())
         file.save(path, gzipped=True, byteorder="big")
@@ -170,6 +174,10 @@ class Schematic:
         return cls.from_nbt(nbt)
 
     def to_nbt(self) -> nbtlib.Compound:
+        if not self.region_count:
+            raise ValueError(
+                f"Schematic {self.name!r} needs at least one region")
+
         nbt = nbtlib.Compound()
 
         # meta data

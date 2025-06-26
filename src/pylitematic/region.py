@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from bitpacking import bitpack, bitunpack
-from functools import cached_property
+import copy
 from itertools import product
 import nbtlib
 import numpy as np
@@ -10,7 +10,7 @@ import twos
 from typing import Iterator
 
 from .block_state import BlockState
-from .geometry import BlockPosition, Size3D
+from .geometry import BlockPosition, Direction, Size3D
 from .resource_location import BlockId
 
 
@@ -44,6 +44,7 @@ class Region:
         self._local = LocalRegionView(self)
         self._world = WorldRegionView(self)
         self._numpy = NumpyRegionView(self)
+        self._view = self._local
 
     @property
     def local(self) -> LocalRegionView:
@@ -57,23 +58,70 @@ class Region:
     def numpy(self) -> NumpyRegionView:
         return self._numpy
 
+    def set_default_view(self, view: _RegionView) -> None:
+        self._view = view
+
     def __contains__(self, item) -> bool:
-        return item in self.local
+        return item in self._view
 
-    def __eq__(self, other) -> bool:
-        return self.local == other
+    def __eq__(self, other) -> np.ndarray[bool]:
+        return self._view == other
 
-    def __ne__(self, other) -> bool:
-        return self.local != other
+    def __ne__(self, other) -> np.ndarray[bool]:
+        return self._view != other
+
+    def __lt__(self, other) -> np.ndarray[bool]:
+        return self._view < other
+
+    def __gt__(self, other) -> np.ndarray[bool]:
+        return self._view > other
 
     def __getitem__(self, key):
-        return self.local[key]
+        return self._view[key]
 
     def __setitem__(self, key, value) -> None:
-        self.local[key] = value
+        self._view[key] = value
 
     def __iter__(self) -> tuple[BlockPosition, BlockState]:
-        return iter(self.local)
+        return iter(self._view)
+
+
+    def clear(self) -> None:
+        self._palette: list[BlockState] = [AIR]
+        self._palette_map: dict[BlockState, int] = {AIR: 0}
+        self._blocks = np.zeros(abs(self._size), dtype=int)
+
+        self._entities.clear()
+        self._tile_entities.clear()
+        self._block_ticks.clear()
+        self._fluid_ticks.clear()
+
+    def copy(
+        self,
+        origin: tuple[int, int, int] | BlockPosition | None = None,
+    ) -> Region:
+        if origin is None:
+            origin = self._origin
+
+        reg = Region(size=self._size, origin=origin)
+        reg._blocks = copy.deepcopy(self._blocks)
+        reg._palette = copy.deepcopy(self._palette)
+        reg._palette_map = copy.deepcopy((self._palette_map))
+
+        reg._entities = copy.deepcopy(self._entities)
+        reg._tile_entities = copy.deepcopy(self._tile_entities)
+        reg._block_ticks = copy.deepcopy(self._block_ticks)
+        reg._fluid_ticks = copy.deepcopy(self._fluid_ticks)
+        reg._view = type(self._view)(reg)
+
+        return reg
+
+    def flip(self, axis: int | tuple[int] | None = None) -> None:
+        # TODO
+        # * flip size and possibly change origin?
+        # * handle entities
+        # * change BlockState properties accordingly
+        self._blocks = np.flip(self._blocks, axis=axis)
 
     def compact_palette(self) -> None:
         # TODO: determine all appropriate places to call this method
@@ -146,31 +194,64 @@ class Region:
     def origin(self) -> BlockPosition:
         return self._origin
 
-    @property
-    def block_count(self) -> int:
-        # TODO: Add filter BlockStates / BlockIds and rename to count()
-        return np.sum(self != AIR).item()
+    @origin.setter
+    def origin(self, value: tuple[int, int, int] | BlockPosition) -> None:
+        if not isinstance(value, BlockPosition):
+            value = BlockPosition(*value)
+        self._origin = value
+
+    def count(self, block: BlockState | BlockId) -> int:
+        return np.sum(self == block).item()
 
     @property
     def lower(self) -> BlockPosition:
         return self.local.lower
+        # return self._view.lower
 
     @property
     def upper(self) -> BlockPosition:
         return self.local.upper
+        # return self._view.upper
 
     @property
     def bounds(self) -> tuple[BlockPosition, BlockPosition]:
         return self.local.bounds
+        # return self._view.bounds
 
     def items(self) -> Iterator[tuple[BlockPosition, BlockState]]:
-        return self.local.items()
+        return self._view.items()
 
     def positions(self) -> Iterator[BlockPosition]:
-        return self.local.positions()
+        return self._view.positions()
 
     def blocks(self) -> Iterator[BlockState]:
-        return self.local.blocks()
+        return self._view.blocks()
+
+    # masking relative to BlockState / BlockId
+    def relative_to(
+        self,
+        block: BlockState | BlockId,
+        direction: BlockPosition,
+    ) -> np.ndarray[bool]:
+        return self._view.relative_to(block, direction)
+
+    def above_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.above_of(block)
+
+    def below_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.below_of(block)
+
+    def north_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.north_of(block)
+
+    def south_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.south_of(block)
+
+    def west_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.west_of(block)
+
+    def east_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.east_of(block)
 
     # block position transformations
     def world_to_local(self, world: BlockPosition) -> BlockPosition:
@@ -263,6 +344,21 @@ class _RegionView(ABC):
     def _transform_index(self, index):
         ...
 
+    def _block_mask(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        if not isinstance(block, (BlockState, BlockId)):
+            raise TypeError(f"'block' needs to be BlockState or BlockId")
+
+        palette = np.array(self._palette, dtype=object)
+
+        # matches = np.array([block == state for state in palette])
+        # return matches[self._blocks]
+        if isinstance(block, BlockState):
+            matches = np.array([state == block for state in palette])
+        else:
+            matches = np.array([state.id == block for state in palette])
+
+        return matches[self._blocks]
+
     def __getitem__(self, key):
         if isinstance(key, BlockPosition):
             # return self.at(key) # TODO
@@ -331,6 +427,27 @@ class _RegionView(ABC):
         else:
             return False
 
+    def __eq__(self, other) -> np.ndarray[bool]:
+        if not isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        mask = self._block_mask(other)
+        return self._align_array(mask)
+
+    def __ne__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return np.invert(self.__eq__(other))
+
+    def __lt__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return self.below_of(other)
+
+    def __gt__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return self.above_of(other)
+
     def __iter__(self) -> Iterator[tuple[BlockPosition, BlockState]]:
         return self.items()
 
@@ -353,24 +470,55 @@ class _RegionView(ABC):
         for block in palette[indices]:
             yield block
 
-    def __eq__(self, other) -> np.ndarray[bool]:
-        palette = np.array(self._palette, dtype=object)
+    def _move_mask(
+        self,
+        mask: np.ndarray[bool],
+        direction: BlockPosition,
+    ) -> np.ndarray[bool]:
+        result = np.zeros_like(mask, dtype=bool)
 
-        if isinstance(other, BlockState):
-            matches = np.array([state == other for state in palette])
-            mask = matches[self._blocks]
+        slices_src = [slice(None)] * self._blocks.ndim
+        slices_dst = [slice(None)] * self._blocks.ndim
 
-        elif isinstance(other, BlockId):
-            matches = np.array([state.id == other for state in palette])
-            mask = matches[self._blocks]
+        for axis, dim in enumerate(direction):
+            if dim == 0:
+                continue
+            elif dim > 0:
+                slices_src[axis] = slice(0, -dim)
+                slices_dst[axis] = slice(dim, None)
+            else:
+                slices_src[axis] = slice(-dim, None)
+                slices_dst[axis] = slice(0, dim)
 
-        else:
-            return NotImplemented
+        result[tuple(slices_dst)] = mask[tuple(slices_src)]
+        return result
 
+    def relative_to(
+        self,
+        block: BlockState | BlockId,
+        direction: BlockPosition,
+    ) -> np.ndarray[bool]:
+        mask = self._block_mask(block)
+        mask = self._move_mask(mask, direction)
         return self._align_array(mask)
 
-    def __ne__(self, other) -> np.ndarray[bool]:
-        return np.invert(self.__eq__(other))
+    def above_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.UP)
+
+    def below_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.DOWN)
+
+    def north_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.NORTH)
+
+    def south_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.SOUTH)
+
+    def west_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.WEST)
+
+    def east_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.EAST)
 
     property
     @abstractmethod
@@ -382,15 +530,15 @@ class _RegionView(ABC):
     def size(self) -> Size3D:
         ...
 
-    @cached_property
+    @property
     def limit(self) -> BlockPosition:
         return self.origin + self.size.limit
 
-    @cached_property
+    @property
     def lower(self) -> BlockPosition:
         return BlockPosition(*np.min((self.origin, self.limit), axis=0))
 
-    @cached_property
+    @property
     def upper(self) -> BlockPosition:
         return BlockPosition(*np.max((self.origin, self.limit), axis=0))
 
@@ -428,7 +576,7 @@ class _OrientedView(_RegionView):
     def size(self) -> Size3D:
         return self.region._size
 
-    @cached_property
+    @property
     def negative_axes(self) -> tuple[int,...]:
         return tuple(np.argwhere(self.size < 0).flatten().tolist())
 
