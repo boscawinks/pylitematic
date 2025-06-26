@@ -51,7 +51,7 @@ class Vec3i:
         return self.__add__(other)
 
     def __sub__(self, other) -> Vec3i:
-        return self.__add__(-other)
+        return type(self)(*(np.array(self) - other))
 
     def __rsub__(self, other) -> Vec3i:
         return -self.__sub__(other)
