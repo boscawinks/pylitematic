@@ -10,6 +10,7 @@ from typing import Iterator
 
 from pylitematic.geometry import BlockPosition, Size3D
 from pylitematic.region import AIR, Region
+from pylitematic.block_state import AIR
 
 
 DEFAULT_VERSION_MAJOR: int = 7
@@ -74,8 +75,6 @@ class Schematic:
         self.version_major = version_major
         self.version_minor = version_minor
         self.mc_version = mc_version
-
-        self.modified: bool = True
 
     def __getitem__(self, key):
         return self._regions[key]
@@ -202,7 +201,7 @@ class Schematic:
         # regions
         regions = nbtlib.Compound()
         for name, region in self.regions():
-            region.compact_palette()
+            region.reduce_palette()
             regions[name] = region.to_nbt()
         nbt["Regions"] = regions
 
