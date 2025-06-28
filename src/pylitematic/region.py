@@ -2,19 +2,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from bitpacking import bitpack, bitunpack
-from functools import cached_property
+import copy
 from itertools import product
 import nbtlib
 import numpy as np
 import twos
 from typing import Iterator
 
-from .block_state import BlockState
-from .geometry import BlockPosition, Size3D
-from .resource_location import BlockId
-
-
-AIR = BlockState("air")
+from .block_palette import BlockPalette
+from .block_state import AIR, BlockId, BlockState
+from .geometry import BlockPosition, Direction, Size3D
 
 
 class Region:
@@ -31,9 +28,8 @@ class Region:
             origin = BlockPosition(*origin)
         self._origin: BlockPosition = origin
 
-        self._palette: list[BlockState] = [AIR] # TODO: add clear method
-        self._palette_map: dict[BlockState, int] = {AIR: 0} # TODO: bind tighter to _palette
-        self._blocks = np.zeros(abs(self._size), dtype=int)
+        self._palette: BlockPalette = BlockPalette()
+        self._index_array = np.zeros(abs(self._size), dtype=int)
 
         # TODO: Add support for (tile) entities and ticks
         self._entities = nbtlib.List[nbtlib.Compound]()
@@ -44,6 +40,7 @@ class Region:
         self._local = LocalRegionView(self)
         self._world = WorldRegionView(self)
         self._numpy = NumpyRegionView(self)
+        self._view = self._local
 
     @property
     def local(self) -> LocalRegionView:
@@ -57,67 +54,92 @@ class Region:
     def numpy(self) -> NumpyRegionView:
         return self._numpy
 
+    def set_default_view(self, view: _RegionView) -> None:
+        self._view = view
+
     def __contains__(self, item) -> bool:
-        return item in self.local
+        return item in self._view
 
-    def __eq__(self, other) -> bool:
-        return self.local == other
+    def __eq__(self, other) -> np.ndarray[bool]:
+        return self._view == other
 
-    def __ne__(self, other) -> bool:
-        return self.local != other
+    def __ne__(self, other) -> np.ndarray[bool]:
+        return self._view != other
+
+    def __lt__(self, other) -> np.ndarray[bool]:
+        return self._view < other
+
+    def __gt__(self, other) -> np.ndarray[bool]:
+        return self._view > other
 
     def __getitem__(self, key):
-        return self.local[key]
+        return self._view[key]
 
     def __setitem__(self, key, value) -> None:
-        self.local[key] = value
+        self._view[key] = value
 
     def __iter__(self) -> tuple[BlockPosition, BlockState]:
-        return iter(self.local)
+        return iter(self._view)
 
-    def compact_palette(self) -> None:
-        # TODO: determine all appropriate places to call this method
-        idx = np.unique(self._blocks)
-        if 0 not in idx:
-            # always include minecraft:air as the first entry in the palette
-            idx = np.insert(idx, 0, 0)
-        index_map = {old: new for new, old in enumerate(idx)}
+    def clear(self) -> None:
+        self._palette.clear()
+        self._index_array = np.zeros(abs(self._size), dtype=int)
 
-        # compacted palette and mapping
-        palette = np.array(self._palette, dtype=object)[idx].tolist()
-        palette_map = {res: idx for idx, res in enumerate(palette)}
+        self._entities.clear()
+        self._tile_entities.clear()
+        self._block_ticks.clear()
+        self._fluid_ticks.clear()
 
-        lookup = np.full(max(index_map) + 1, -1, dtype=int)
-        for old, new in index_map.items():
-            lookup[old] = new
-        self._blocks = lookup[self._blocks]
+    def copy(
+        self,
+        origin: tuple[int, int, int] | BlockPosition | None = None,
+    ) -> Region:
+        """Return a copy of the Region."""
+        if origin is None:
+            origin = self._origin
 
-        self._palette = palette
-        self._palette_map = palette_map
+        reg = Region(size=self._size, origin=origin)
+        reg._index_array = copy.deepcopy(self._index_array)
+        reg._palette = self._palette.copy()
+
+        reg._entities = copy.deepcopy(self._entities)
+        reg._tile_entities = copy.deepcopy(self._tile_entities)
+        reg._block_ticks = copy.deepcopy(self._block_ticks)
+        reg._fluid_ticks = copy.deepcopy(self._fluid_ticks)
+        reg._view = type(self._view)(reg)
+
+        return reg
+
+    def flip(self, axis: int | tuple[int] | None = None) -> None:
+        # TODO
+        # * flip size and possibly change origin?
+        # * handle entities
+        # * change BlockState properties accordingly
+        self._index_array = np.flip(self._index_array, axis=axis)
+
+    def reduce_palette(self) -> None:
+        self._index_array = self._palette.reduce(self._index_array)
 
     # block state en- / decoding (NBT)
-    def _bits_per_state(self) -> int:
-        return max(2, (len(self._palette) - 1).bit_length())
-
     def _decode_block_states(
         self,
         data: nbtlib.LongArray,
     ) -> np.ndarray[int]:
         states = bitunpack(
             chunks=[twos.to_unsigned(x, 64) for x in data],
-            field_width=self._bits_per_state(),
+            field_width=self._palette.bits_per_state,
             chunk_width=64,
         )
-        states = list(states)[:self.volume]
+        states = list(states)[:self.volume] # remove trailing bit fields
         shape = (abs(self.height), abs(self.length), abs(self.width))
         states = np.asarray(states, dtype=int).reshape(shape) # y,z,x
         return states.transpose(2, 0, 1) # x,y,z
 
     def _encode_block_states(self) -> nbtlib.LongArray:
-        states = self._blocks.transpose(1, 2, 0).ravel() # x,y,z to y,z,x
+        states = self._index_array.transpose(1, 2, 0).ravel() # x,y,z to y,z,x
         chunks = bitpack(
             states.tolist(),
-            field_width=self._bits_per_state(),
+            field_width=self._palette.bits_per_state,
             chunk_width=64,
         )
         return nbtlib.LongArray([twos.to_signed(x, 64) for x in chunks])
@@ -146,31 +168,79 @@ class Region:
     def origin(self) -> BlockPosition:
         return self._origin
 
-    @property
-    def block_count(self) -> int:
-        # TODO: Add filter BlockStates / BlockIds and rename to count()
-        return np.sum(self != AIR).item()
+    @origin.setter
+    def origin(self, value: tuple[int, int, int] | BlockPosition) -> None:
+        if not isinstance(value, BlockPosition):
+            value = BlockPosition(*value)
+        self._origin = value
+
+    def count(self, block: BlockState | BlockId) -> int:
+        return np.sum(self == block).item()
 
     @property
     def lower(self) -> BlockPosition:
         return self.local.lower
+        # return self._view.lower
 
     @property
     def upper(self) -> BlockPosition:
         return self.local.upper
+        # return self._view.upper
 
     @property
     def bounds(self) -> tuple[BlockPosition, BlockPosition]:
         return self.local.bounds
+        # return self._view.bounds
 
     def items(self) -> Iterator[tuple[BlockPosition, BlockState]]:
-        return self.local.items()
+        return self._view.items()
 
     def positions(self) -> Iterator[BlockPosition]:
-        return self.local.positions()
+        return self._view.positions()
 
     def blocks(self) -> Iterator[BlockState]:
-        return self.local.blocks()
+        return self._view.blocks()
+
+    def where(
+        self,
+        mask: np.ndarray[bool] | BlockState | BlockId,
+        x: BlockState | np.ndarray[BlockState],
+        y: BlockState | np.ndarray[BlockState]| None = None,
+    ) -> None:
+        self._view.where(mask, x, y)
+
+    def poswhere(
+        self,
+        mask: np.ndarray[bool] | BlockState | BlockId,
+    ) -> list[BlockPosition]:
+        """Return a list of BlockPositions at which `mask` applies."""
+        return self._view.poswhere(mask)
+
+    # masking relative to BlockState / BlockId
+    def relative_to(
+        self,
+        block: BlockState | BlockId,
+        direction: BlockPosition, # absolute direction
+    ) -> np.ndarray[bool]:
+        return self._view.relative_to(block, direction)
+
+    def above_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.above_of(block)
+
+    def below_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.below_of(block)
+
+    def north_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.north_of(block)
+
+    def south_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.south_of(block)
+
+    def west_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.west_of(block)
+
+    def east_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self._view.east_of(block)
 
     # block position transformations
     def world_to_local(self, world: BlockPosition) -> BlockPosition:
@@ -198,8 +268,7 @@ class Region:
         nbt["Position"] = self._origin.to_nbt()
         nbt["Size"] = self._size.to_nbt()
 
-        pal = [block.to_nbt() for block in self._palette]
-        nbt["BlockStatePalette"] = nbtlib.List[nbtlib.Compound](pal)
+        nbt["BlockStatePalette"] = self._palette.to_nbt()
         nbt["BlockStates"] = self._encode_block_states()
 
         nbt["Entities"] = self._entities
@@ -216,10 +285,8 @@ class Region:
 
         region = cls(origin=pos, size=size)
 
-        region._palette = [
-            BlockState.from_nbt(block) for block in nbt["BlockStatePalette"]]
-        region._palette_map = {bl: i for i, bl in enumerate(region._palette)}
-        region._blocks = region._decode_block_states(nbt["BlockStates"])
+        region._index_array = region._decode_block_states(nbt["BlockStates"])
+        region._palette = BlockPalette.from_nbt(nbt["BlockStatePalette"])
 
         region._entities = nbt["Entities"]
         region._tile_entities = nbt["TileEntities"]
@@ -233,27 +300,26 @@ class _RegionView(ABC):
 
     def __init__(self, region: Region) -> None:
         self.region = region
-        # TODO: add support for (tile) entities and ticks
 
     @property
-    def _blocks(self) -> np.ndarray[int]:
-        return self.region._blocks
+    def _index_array(self) -> np.ndarray[int]:
+        return self.region._index_array
 
     @property
-    def _palette(self) -> list[BlockState]:
+    def _palette(self) -> BlockPalette:
         return self.region._palette
-
-    @property
-    def _palette_map(self) -> dict[BlockState, int]:
-        return self.region._palette_map
 
     @abstractmethod
     def position_to_index(self, pos: BlockPosition) -> tuple[int, int, int]:
-        ...
+        """Convert a BlockPosition in the view's coordinate system to the
+        corresponding 3D index in the internal storage array.
+        """
 
     @abstractmethod
     def index_to_position(self, index: tuple[int, int, int]) -> BlockPosition:
-        ...
+        """Convert a 3D index in the internal storage array to the corresponding
+        BlockPosition in the view's coordinate system.
+        """
 
     @abstractmethod
     def _align_array(self, arr: np.ndarray) -> np.ndarray:
@@ -263,17 +329,24 @@ class _RegionView(ABC):
     def _transform_index(self, index):
         ...
 
+    def _state_array(self) -> np.ndarray[BlockState]:
+        return self._palette.get_state(self._index_array)
+
+    def _block_mask(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        if not isinstance(block, (BlockState, BlockId)):
+            raise TypeError(f"'block' needs to be BlockState or BlockId")
+        matches = self._palette == block
+        return matches[self._index_array]
+
     def __getitem__(self, key):
+        # TODO: allow 'key' to be a BlockState / BlockId
         if isinstance(key, BlockPosition):
             # return self.at(key) # TODO
             key = tuple(key)
         index = self._transform_index(key)
 
-        indices = self._blocks[index]
-        if np.isscalar(indices):
-            return self._palette[indices]
-        else:
-            return np.array(self._palette, dtype=object)[indices]
+        indices = self._index_array[index]
+        return self._palette.get_state(indices)
 
     def __setitem__(self, key, value):
         if isinstance(key, BlockPosition):
@@ -286,13 +359,12 @@ class _RegionView(ABC):
 
         if isinstance(value, BlockState):
             # assign single BlockState to slice
-            if value not in self._palette_map:
-                self._palette_map[value] = len(self._palette)
-                self._palette.append(value)
-            self._blocks[index] = self._palette_map[value]
+            if value not in self._palette:
+                self._palette.add_state(value)
+            self._index_array[index] = self._palette.get_index(value)
 
         elif isinstance(value, np.ndarray):
-            if value.shape != self._blocks[index].shape:
+            if value.shape != self._index_array[index].shape:
                 # TODO: allow casting
                 raise ValueError(
                     "Shape mismatch between assigned array and target slice")
@@ -301,12 +373,11 @@ class _RegionView(ABC):
             unique_states, xdi = np.unique(value, return_inverse=True)
             idx = []
             for state in unique_states:
-                if state not in self._palette_map:
-                    self._palette_map[state] = len(self._palette)
-                    self._palette.append(state)
-                idx.append(self._palette_map[state])
+                if state not in self._palette:
+                    self._palette.add_state(state)
+                idx.append(self._palette.get_index(state))
             index_array = np.array(idx, dtype=int)[xdi].reshape(value.shape)
-            self._blocks[index] = index_array
+            self._index_array[index] = index_array
         else:
             raise TypeError(
                 "Value must be a BlockState or a list of BlockStates")
@@ -316,20 +387,38 @@ class _RegionView(ABC):
             return all(self.lower <= item) and all(item <= self.upper)
 
         elif isinstance(item, BlockState):
-            index = self._palette_map.get(item)
-            if index is None:
+            if not item in self._palette:
                 return False
-            return index in self._blocks
-            # return np.any(self._blocks == index).item()
+            return self._palette.get_index(item) in self._index_array
 
         elif isinstance(item, BlockId):
             return any(
-                # bs.id == item and np.any(self._blocks == idx)
-                bs.id == item and idx in self._blocks
-                for bs, idx in self._palette_map.items())
+                bs.id == item and idx in self._index_array
+                for bs, idx in self._palette.items())
 
         else:
             return False
+
+    def __eq__(self, other) -> np.ndarray[bool]:
+        if not isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        mask = self._block_mask(other)
+        return self._align_array(mask)
+
+    def __ne__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return np.invert(self.__eq__(other))
+
+    def __lt__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return self.below_of(other)
+
+    def __gt__(self, other) -> np.ndarray[bool]:
+        if not  isinstance(other, (BlockState, BlockId)):
+            return NotImplemented
+        return self.above_of(other)
 
     def __iter__(self) -> Iterator[tuple[BlockPosition, BlockState]]:
         return self.items()
@@ -348,29 +437,86 @@ class _RegionView(ABC):
             yield BlockPosition(x, y, z)
 
     def blocks(self) -> Iterator[BlockState]:
-        indices = self._align_array(self._blocks).transpose(2, 1, 0).ravel()
-        palette = np.array(self._palette, dtype=object)
-        for block in palette[indices]:
+        indices = self._align_array(self._index_array).transpose(2, 1, 0)
+        for block in self._palette.get_state(indices.ravel()):
             yield block
 
-    def __eq__(self, other) -> np.ndarray[bool]:
-        palette = np.array(self._palette, dtype=object)
+    def where(
+        self,
+        mask: np.ndarray[bool] | BlockState | BlockId,
+        x: BlockState | np.ndarray[BlockState],
+        y: BlockState | np.ndarray[BlockState] | None = None,
+    ) -> None:
+        # TODO: allow 'mask' to be a BlockState / BlockId array
+        # TODO: allow 'x' and 'y' to be Region / _RegionView
 
-        if isinstance(other, BlockState):
-            matches = np.array([state == other for state in palette])
-            mask = matches[self._blocks]
+        if isinstance(mask, (BlockState | BlockId)):
+            mask = self == mask
 
-        elif isinstance(other, BlockId):
-            matches = np.array([state.id == other for state in palette])
-            mask = matches[self._blocks]
+        self[mask] = x
+        if y is not None:
+            self[np.invert(mask)] = y
 
-        else:
-            return NotImplemented
+    def poswhere(
+        self,
+        mask: np.ndarray[bool] | BlockState | BlockId,
+    ) -> list[BlockPosition]:
+        """Return a list of BlockPositions at which `mask` applies."""
 
+        if isinstance(mask, (BlockState | BlockId)):
+            mask = self == mask
+        mask = self._align_array(mask)
+        return [self.index_to_position(x) for x in np.argwhere(mask)]
+
+    def _move_mask(
+        self,
+        mask: np.ndarray[bool],
+        direction: BlockPosition,
+    ) -> np.ndarray[bool]:
+        result = np.zeros_like(mask, dtype=bool)
+
+        slices_src = [slice(None)] * self._index_array.ndim
+        slices_dst = [slice(None)] * self._index_array.ndim
+
+        for axis, dim in enumerate(direction):
+            if dim == 0:
+                continue
+            elif dim > 0:
+                slices_src[axis] = slice(0, -dim)
+                slices_dst[axis] = slice(dim, None)
+            else:
+                slices_src[axis] = slice(-dim, None)
+                slices_dst[axis] = slice(0, dim)
+
+        result[tuple(slices_dst)] = mask[tuple(slices_src)]
+        return result
+
+    def relative_to(
+        self,
+        block: BlockState | BlockId,
+        direction: BlockPosition,
+    ) -> np.ndarray[bool]:
+        mask = self._block_mask(block)
+        mask = self._move_mask(mask, direction)
         return self._align_array(mask)
 
-    def __ne__(self, other) -> np.ndarray[bool]:
-        return np.invert(self.__eq__(other))
+    def above_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.UP)
+
+    def below_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.DOWN)
+
+    def north_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.NORTH)
+
+    def south_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.SOUTH)
+
+    def west_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.WEST)
+
+    def east_of(self, block: BlockState | BlockId) -> np.ndarray[bool]:
+        return self.relative_to(block, Direction.EAST)
 
     property
     @abstractmethod
@@ -382,15 +528,15 @@ class _RegionView(ABC):
     def size(self) -> Size3D:
         ...
 
-    @cached_property
+    @property
     def limit(self) -> BlockPosition:
         return self.origin + self.size.limit
 
-    @cached_property
+    @property
     def lower(self) -> BlockPosition:
         return BlockPosition(*np.min((self.origin, self.limit), axis=0))
 
-    @cached_property
+    @property
     def upper(self) -> BlockPosition:
         return BlockPosition(*np.max((self.origin, self.limit), axis=0))
 
@@ -404,10 +550,13 @@ class NumpyRegionView(_RegionView):
     @property
     def origin(self) -> BlockPosition:
         return BlockPosition(0, 0, 0)
+        # reg_size = self.region._size
+        # return BlockPosition(*np.where(reg_size, 0, -(reg_size + 1)))
 
     @property
     def size(self) -> Size3D:
         return abs(self.region._size)
+        # return self.region._size
 
     def position_to_index(self, pos: BlockPosition) -> tuple[int, int, int]:
         return tuple(pos)
@@ -428,7 +577,7 @@ class _OrientedView(_RegionView):
     def size(self) -> Size3D:
         return self.region._size
 
-    @cached_property
+    @property
     def negative_axes(self) -> tuple[int,...]:
         return tuple(np.argwhere(self.size < 0).flatten().tolist())
 
@@ -463,7 +612,7 @@ class _OrientedView(_RegionView):
         elif isinstance(key, np.ndarray) and key.dtype == bool:
             # boolean indexing
             key = self._align_array(key)
-            if key.shape != self._blocks.shape:
+            if key.shape != self._index_array.shape:
                 raise IndexError("Boolean index must match region shape.")
             return key
 

@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from nbtlib import Compound
 from typing import Any, Iterator
 
-from .resource_location import BlockId
 from .block_property import Properties
+from .resource_location import ResourceLocation
+
+
+@dataclass(frozen=True, order=True)
+class BlockId(ResourceLocation):
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, BlockState):
+            return self == other.id
+        else:
+            return super().__eq__(other)
 
 
 class BlockState:
@@ -42,10 +53,18 @@ class BlockState:
 
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, str):
-            other = BlockState.from_string(other)
-        elif not isinstance(other, BlockState):
+            try:
+                other = BlockState.from_string(other)
+                return self == other
+            except ValueError:
+                return False
+
+        if isinstance(other, BlockId):
+            return self.id == other
+        elif isinstance(other, BlockState):
+            return (self.id, self._props) == (other.id, other._props)
+        else:
             return NotImplemented
-        return (self.id, self._props) == (other.id, other._props)
 
     def __lt__(self, other: Any) -> bool:
         if not isinstance(other, BlockState):
@@ -117,3 +136,6 @@ class BlockState:
 
     def without_props(self) -> BlockState:
         return BlockState(self.id)
+
+
+AIR = BlockState("air")
